@@ -197,7 +197,7 @@ class Project(util.SerializableMixin, projectmixins.validation):
         with open(p) as f:
             return dict( (key, val)
                          for (key, val) in util.deserialize_tsv(f) 
-                         if not hasattr(self, key) )
+                         if key not in self.__dict__ )
 
 
     def __getattr__(self, name):
