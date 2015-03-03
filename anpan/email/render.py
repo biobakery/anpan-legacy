@@ -19,7 +19,7 @@ def render_to_email(context,         address_list,
         kwargs.setdefault(k, v)
 
     if not template_str:
-        here = os.path.dirname(os.path.realpath(__file__))
+        here = os.path.dirname(os.path.abspath(__file__))
         template_str = os.path.join(here, "notification.tpl")
 
     msg = template(template_str, **context)

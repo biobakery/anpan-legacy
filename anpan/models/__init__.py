@@ -100,7 +100,7 @@ class User(util.SerializableMixin, usermixins.LDAP):
 
     @staticmethod
     def from_path(path):
-        path_parts = os.path.split(os.path.realpath(os.path.abspath(path)))
+        path_parts = os.path.split(os.path.abspath(path))
         repo_str, user_str = path_parts
         return Repository(path=repo_str).users[user_str]
 
@@ -158,8 +158,7 @@ class Project(util.SerializableMixin, projectmixins.validation):
     
     @staticmethod
     def from_path(path):
-        rest, project_str = os.path.split(
-            os.path.realpath(os.path.abspath(path)))
+        rest, project_str = os.path.split(os.path.abspath(path))
         repo_str, user_str = os.path.split(rest)
         return Repository(path=repo_str).users[user_str].projects[project_str]
         

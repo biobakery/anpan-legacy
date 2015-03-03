@@ -17,7 +17,7 @@ from .. import models, settings
 class ProjectLoader(TaskLoader):
 
     def load_tasks(self, cmd, opt_values, pos_args):
-        project_path = os.path.realpath(opt_values["project"])
+        project_path = os.path.abspath(opt_values["project"])
         project = models.Project.from_path(project_path)
         if not project.exists():
             raise InvalidCommand("project %s doesn't exist" %(project_path))
