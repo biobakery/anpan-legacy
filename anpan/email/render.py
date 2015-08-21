@@ -6,7 +6,7 @@ from bottle import template
 
 from .. import settings
 
-def render_to_email(context,         address_list, 
+def to_email(context,         address_list, 
                     template_str=None, **kwargs):
     """send an email to someone by rendering a template with 
     the provided context (a dictionary).
