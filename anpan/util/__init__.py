@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import inspect
 
 
@@ -36,3 +37,13 @@ def rmext(name_str):
         noext = name_str
 
     return os.path.join(path, noext)
+
+
+def stdin_open(fname, *args, **kwargs):
+    if not fname or fname == "-":
+        if "stdin_msg" in kwargs:
+            print >> sys.stderr, kwargs['stdin_msg']
+        return sys.stdin
+    else:
+        return open(fname, *args, **kwargs)
+    

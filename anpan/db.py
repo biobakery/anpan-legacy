@@ -45,7 +45,7 @@ class BaseBackend(object):
 
 
 class LevelDBBackend(BaseBackend):
-    STATS_RANGE_KEYS = ['group', 'group']
+    STATS_RANGE_KEYS = ['user', 'group']
 
     def __init__(self, db_dir, *args, **kws):
         self.db_dir = db_dir
@@ -74,8 +74,7 @@ class LevelDBBackend(BaseBackend):
 
     def create(self):
         self.open(True)
-        stats = {"user":  (0, 0),
-                 "group": (0, 0)}
+        stats = dict([ (k, (0, 0)) for k in self.STATS_RANGE_KEYS ])
         db.Put("stats", serialize.obj(stats), sync=True)
         
     

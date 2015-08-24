@@ -1,28 +1,27 @@
 import os
 
-c_repository_root = "/vagrant/data/ccfa/users"
+from . import db
+
+
+repository_root = "/home/rschwager/test_data"
 settings_env_var  = "ANPAN_SETTINGS_FILE"
+backend = lambda: db.LevelDBBackend("/home/rschwager/leveldb")
 
 class email:
     default_from_addr = "anpan@example.com"
     default_subject   = "A note from your friendly networked AnADAMA resource"
     default_smtp_serv = "localhost"
 
+class web:
+    host = "0.0.0.0"
+    port = 8080
+    prefix_url = ""
+
 class ldap:
     url         = "ldaps://dc2-rc/"
     bind_dn     = "CN=clusterldap,OU=Unmanaged Service Accounts,DC=rc,DC=domain"
     bind_pw     = ""
     search_base = "DC=rc,DC=domain"
-
-class workflows:
-    product_directory = "anpan_products"
-
-class users:
-    ignored = ['admin']
-
-class web:
-    host = "0.0.0.0"
-    port = 8080
 
 # Pay no attention to that man behind the curtain
 

@@ -22,7 +22,7 @@ def _safe_str_cmp(a, b):
 
 
 def compare(a, b):
-    return _safe_str_cmp(split(a).hash, split(b).hash)
+    return _safe_str_cmp(a.hash, b.hash)
 
 
 def salt(size_bytes=DEFAULT_SALT_LEN):
@@ -69,3 +69,8 @@ def is_hashed(s):
     else:
         return True
 
+hasher_map = {
+    "pbkdf2-256" : hash,
+    "default" : hash,
+    None: hash
+}
