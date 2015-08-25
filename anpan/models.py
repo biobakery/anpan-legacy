@@ -1,13 +1,22 @@
 import os
 
+from anadama.loader import PipelineLoader
+from butter.commands import setup_repo
+
 from . import password
 from .util.serialize import SerializableMixin 
+
+def _validate(success, msg, container):
+    if not success:
+        container.append(msg)
+
 
 class PermissionsDict(dict):
     known_permissions = set([
         "superuser",
         "user.create", "user.modify",
         "group.create", "group.modify",
+        "project.create"
     ])
 
     def __setitem__(self, key, val):
@@ -93,17 +102,52 @@ class Project(SerializableMixin):
     serializable_attrs = ['name', 'username', 'main_pipeline',
                           'optional_pipelines']
     
-    def __init__(self, name, username):
+    def __init__(self, name, username,
+                 main_pipeline=str(), optional_pipelines=list(),
+                 ensure_filestructure=False):
         self.name = name
         self.username = username
-        self.main_pipeline = str()
-        self.optional_pipelines = list()
+        self.main_pipeline = main_pipeline
+        self.optional_pipelines = optional_pipelines
         
-        
-    def exists(self):
-        raise NotImplementedError
+        if ensure_filestructure and not self.deployed():
+            self.deploy()
 
 
+    def validate(self):
+        self.validation_errors = v = []
+        _validate(bool(self.main_pipeline),
+                  "The project must use a main pipeline", v)
+        _validate(type(self.optional_pipelines) is list,
+                  ("The project must have a (maybe empty) "
+                   "list of optional pipelines"), v)
+        for pipename in [self.main_pipeline]+self.optional_pipelines:
+            _validate(PipelineLoader._import(pipename),
+                      "The pipeline `{}' does not exist".format(p), v)
+
+        return len(v) < 1
+
+
+    def deploy(self):
+        # TODO: merge anpan settings with butter settings
+        prev_environ = os.environ.copy()
+        setup_repo(self.path, self.main_pipelin, self.optional_pipelines)
+        os.environ = prev_environ
+
+
+    @property
+    def path(self):
+        return os.path.join(settings.repository_root,
+                            self.username,
+                            self.name)
+
+    def deployed(self):
+        return all(map(os.path.isdir, (self.path, self.path+".work")))
+
+
+    def deploy(self):
+        pass
+    
     @classmethod
     def from_dict(cls, d):
         project = cls(d['name'], d['username'])

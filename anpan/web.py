@@ -6,9 +6,9 @@ from bottle import (
     get,
     put,
     post,
+    abort,
     request,
-    redirect,
-    HTTPResponse
+    redirect
 )
 
 from . import db, models, settings
@@ -48,13 +48,13 @@ def extract_creds(alt_key):
     elif USER_KEY in request.cookies and alt_key in request.cookies:
         username, passwd = map(request.cookies.get, (USER_KEY, alt_key))
     else:
-        return HTTPResponse(401, "Authentication required")
+        abort(401, "Authentication required")
 
     try:
         user = state().db.load_user(username)
     except Exception as e:
         print >> sys.stderr, str(e)
-        return HTTPResponse(401, "Incorrect username or password")
+        abort(401, "Incorrect username or password")
     
 
 def login_reqd(fn):
@@ -72,7 +72,7 @@ def login_reqd(fn):
     
 def check_permissions(*perms):
     if not any(map(request.environ['anpan.user'].permissions.get, perms)):
-        return HTTPResponse(403, "Insufficient permissions")
+        abort(403, "Insufficient permissions")
     return True
 
 
@@ -85,21 +85,22 @@ def validate(u, key="user"):
     if validate != True:
         resp = {"status": 400, "message": "Failed {} validation".format(key),
                 "errors": u.validation_errors}
-        return HTTPResponse(400, serialize.obj(resp))
+        return abort(400, serialize.obj(resp))
     return True
 
 
 _lookup_map = {
     "user": lambda: state().db.load_user,
-    "group": lambda: state().db.load_group
+    "group": lambda: state().db.load_group,
+    "project": lambda: state().db.load_project
 }
 
-def lookup(name, key="user"):
+def lookup(key="user", *args, **kwargs):
     lookup_func = _lookup_map[key]()
     try:
-        obj = lookup_func(username)
+        obj = lookup_func(*args, **kwargs)
     except KeyError:
-        return HTTPResponse(404, key+" not found")
+        return abort(404, key+" not found")
     return obj
 
 
@@ -112,7 +113,7 @@ def login():
     user, password = extract_creds(alt=PASSWD_KEY)
     auth_token = user.authenticate(password)
     if not auth_token:
-        return HTTPResponse(401, "Incorrect username or password")
+        abort(401, "Incorrect username or password")
     else:
         user.auth_tokens.append(auth_token)
         state().db.save_user(user)
@@ -154,6 +155,12 @@ def user_post(username):
     
 
 @login_reqd
+@get(mount+"group/<groupname>")
+def group_get(groupname):
+    g = lookup(groupname, key="group")
+    return serialize.obj(g)
+
+@login_reqd
 @put(mount+"group/<groupname>")
 def group_put(groupname):
     check_permissions("superuser", "group.create")
@@ -179,6 +186,36 @@ def group_post(groupname):
     state().db.store_group(g)
     return serialize.obj({"status": 200,
                           "message": "Group `{}' modified".format(g.name)})
+
+
+@login_reqd
+@get(mount+"project/<projname>")
+def proj_get(projname):
+    user = request.environ['anpan.user']
+    return serialize.obj( lookup(user.name, projname, key="project") )
+
+
+@login_reqd
+@put(mount+"project/<projname>")
+def proj_put(projname):
+    user = request.environ['anpan.user']
+    check_permissions("superuser", "project.create")    
+    input_data = deserialize.obj(from_fp=request.body)
+    for reqd_key in ["main_pipeline", "optional_pipelines"]:
+        if reqd_key not in input_data:
+            abort(400, reqd_key+" is a required field")
+    p = models.Project(user.name, projname, input_data['main_pipeline'],
+                       input_data['optional_pipeline'])
+    validate(p, key="project")
+    p.deploy()
+    if p.deployed():
+        user.projects.append(p.name)
+        state().db.save_project(project)
+    else:
+        abort(500, "Failed to create project "+projname)
+
+    return serialize.obj({"status": 200,
+                          "message": "Project `{}' created".format(p.name)})
 
 
 
