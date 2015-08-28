@@ -7,6 +7,7 @@ setup(
     description='AnADAMA Put on A Network',
     packages=find_packages(exclude=['ez_setup', 'tests', 'tests.*']),
     zip_safe=False,
+    test_suite="nose.collector",
     install_requires=[
         'nose>=1.3.0',
         'simple-pbkdf2',
@@ -24,5 +25,12 @@ setup(
     ],
     classifiers=[
         "Development Status :: 2 - Pre-Alpha"
-    ]
+    ],
+    entry_points= {
+        'console_scripts': [
+            'anpan-web     = anpan.web:main',
+            'anpan-fileweb = anpan.fileweb:main'
+            'anpan         = anpan.cli:main',
+        ],
+    }
 )

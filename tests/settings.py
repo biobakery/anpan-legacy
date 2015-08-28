@@ -12,6 +12,6 @@ def test_settings():
         print >> tmp_file, testconfig
         tmp_file.seek(0)
         os.environ["MIBC_SETTINGS_FILE"] = tmp_file.name
-        import settings
+        from anpan import settings
         assert settings.foobaz.chumble == "spuzz"
         
