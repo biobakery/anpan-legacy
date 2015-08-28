@@ -1,13 +1,18 @@
 import os
 import time
-import hmac
+import random
+from itertools import izip
 from collections import namedtuple
 
 import pbkdf2
 
+from .util import random_string
+
 DEFAULT_SALT_LEN = 32
+DEFAULT_AUTHKEY_LEN=32
 DEFAULT_COST_FACTOR = 5000
 DEFAULT_HASHLEN = 32
+
 
 #thanks @mitsuhiko!
 def _safe_str_cmp(a, b):
@@ -51,23 +56,25 @@ def hash(raw_password, salt_str=None, iters=DEFAULT_COST_FACTOR,
         return HashedPassword(algo, salt_str, iters, hash_str)
 
 
-def serialize(algo, salt, cost, hash):
+def serialize(hashed_pw):
+    algo, salt, cost, hash = hashed_pw
     return "{}${}:{}${}".format(algo, salt, cost, hash)
 
 
-def token(hash_obj, the_time=None):
+def token(length, the_time=None):
     if not the_time:
         the_time = time.time()
-    return hmac.new(hash_obj.hash, str(the_time)).hexdigest()
+    return random_string(n=DEFAULT_AUTHKEY_LEN), the_time
 
 
-def is_hashed(s):
+def is_serialized(s):
     try:
         split(s)
     except:
         return False
     else:
         return True
+
 
 hasher_map = {
     "pbkdf2-256" : hash,

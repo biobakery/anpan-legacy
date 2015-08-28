@@ -4,8 +4,8 @@ from base64 import b64encode as b64
 import leveldb
 
 
-from .models import Group, User, Project
-from .util import serialize, deserialize
+from .models import User, Project, Run
+from .util import serialize, deserialize, get_counter_state
 
 
 
@@ -20,18 +20,12 @@ class BaseBackend(object):
     def create(self):
         raise NotImplementedError
 
+    def checkpoint(self):
+        raise NotImplementedError
+
     def close(self):
         raise NotImplementedError
 
-
-    def load_user(self, username):
-        raise NotImplementedError
-
-    def load_project(self, username, projectname):
-        raise NotImplementedError
-
-    def load_group(self, groupname):
-        raise NotImplementedError
 
     def save_user(self, user_obj):
         raise NotImplementedError
@@ -39,23 +33,37 @@ class BaseBackend(object):
     def save_project(self, project_obj):
         raise NotImplementedError
 
-    def save_group(self, group_obj):
+    def save_run(self, run):
         raise NotImplementedError
 
 
+    def load_user(self, username):
+        raise NotImplementedError
+
+    def load_all_users(self):
+        raise NotImplementedError
+
+    def load_project(self, username, projectname):
+        raise NotImplementedError
+
+    def load_run(self, commit_id, projectname, username):
+        raise NotImplementedError
+
 
 class LevelDBBackend(BaseBackend):
-    STATS_RANGE_KEYS = ['user', 'group']
+    STATS_RANGE_KEYS = ['user']
 
     def __init__(self, db_dir, *args, **kws):
         self.db_dir = db_dir
-        db = None
+        self.db = None
         super(self, LevelDBBackend).__init__(*args, **kws)
 
 
     def ready(self):
         try:
-            db = leveldb.LevelDB(create_if_missing=False, paranoid_checks=True)
+            db = leveldb.LevelDB(self.db_dir,
+                                 create_if_missing=False,
+                                 paranoid_checks=True)
             db.Get("stats")
         except:
             return False
@@ -68,15 +76,27 @@ class LevelDBBackend(BaseBackend):
         self.stats = deserialize.obj(self.db.get("stats"))
         for k in self.STATS_RANGE_KEYS:
             self.stats['k'][1] = counter(self.stats['k'][1])
-        
         return self
-
 
     def create(self):
         self.open(True)
         stats = dict([ (k, (0, 0)) for k in self.STATS_RANGE_KEYS ])
-        db.Put("stats", serialize.obj(stats), sync=True)
+        self.db.Put("stats", serialize.obj(stats), sync=True)
         
+    def checkpoint(self):
+        maybe_ser = lambda k_v: k_v[0], get_counter_state(k_v[1]) \
+                    if k_v[0] in self.STATS_RANGE_KEYS else k_v
+        self.db.Put("stats", serialize.obj(
+            dict(map( maybe_ser, self.stats.iteritems()))
+        ))
+
+    def close(self):
+        self.checkpoint()
+        del self.stats
+        del self.db
+        self.stats = None
+        self.db = None
+
     
     def _2step_get(self, key):
         step_one = self.db.Get(key)
@@ -89,7 +109,7 @@ class LevelDBBackend(BaseBackend):
 
     def _2step_put(self, containerkey, obj_key, val):
         id = next(self.stats[containerkey][1])
-        id = container_key+"+_by_id/"+str(id)
+        id = containerkey+"+_by_id/"+str(id)
         self.db.Put(id, val)
         try:
             self.db.Put(obj_key, id)
@@ -107,21 +127,9 @@ class LevelDBBackend(BaseBackend):
         return "project/{}/{}".format(b64(username), b64(projectname))
         
     @staticmethod
-    def _group_key(groupname):
-        return "group/"+b64(groupname)
+    def _run_key(commit_id, projectname, username):
+        return "run/{}/{}/{}".format(commit_id, b64(username), b64(projectname))
 
-    def load_user(self, username):
-        userblob = self._2step_get(self._user_key(username))
-        return User.from_dict(deserialize.obj(userblob))
-
-    def load_project(self, username, projectname):
-        # projects are contained within users, so no 2step needed here
-        projectblob = self.db.Get(self._project_key(username, projectname))
-        return Project.from_dict(deserialize.obj(projectblob))
-
-    def load_group(self, groupname):
-        groupblob = self._2step_get(self._group_key)
-        return Group.from_dict(deserialize.obj(groupblob))
 
     def save_user(self, user):
         userblob = serialize.obj(user)
@@ -132,7 +140,37 @@ class LevelDBBackend(BaseBackend):
         return self.db.Put(self._project_fmt(project.username, project.name),
                            projectblob)
 
-    def save_group(self, group):
-        groupblob = serialize.obj(group)
-        return self._2step_put("group", self._group_key(group.name), groupblob)
-        
+    def save_run(self, run):
+        return self.db.Put(
+            self._run_key(run.commit_id, run.projectname, run.username),
+            serialize.obj({"reporter_data": run.data,
+                           "exit_status": run.exit_status,
+                           "log": run.log})
+        )
+
+
+    def load_user(self, username):
+        userblob = self._2step_get(self._user_key(username))
+        return User.from_dict(deserialize.obj(userblob))
+
+    def load_all_users(self):
+        keyvals = self.db.RangerIter(
+            key_from="user_by_id/"+str(self.stats['user'][0]),
+            key_to="user_by_id/"+str(get_counter_state(self.stats['user'][1])),
+            include_value=True)
+        for k, v in keyvals:
+            yield v
+
+    def load_project(self, username, projectname):
+        # projects are contained within users, so no 2step needed here
+        projectblob = self.db.Get(self._project_key(username, projectname))
+        return Project.from_dict(deserialize.obj(projectblob))
+
+    def load_run(self, commit_id, projectname, username):
+        runblob = self.db.Get(self._run_key(commit_id, projectname, username))
+        rundata = deserialize.obj(runblob)
+        return Run(commit_id, projectname, username,
+                   rundata.get("reporter_info", None),
+                   rundata.get("exit_status", None),
+                   rundata.get("log", None))
+

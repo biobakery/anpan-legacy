@@ -1,9 +1,11 @@
 import os
+import time
+import shutil
 
 from anadama.loader import PipelineLoader
 from butter.commands import setup_repo
 
-from . import password
+from . import password, settings
 from .util.serialize import SerializableMixin 
 
 def _validate(success, msg, container):
@@ -15,7 +17,6 @@ class PermissionsDict(dict):
     known_permissions = set([
         "superuser",
         "user.create", "user.modify",
-        "group.create", "group.modify",
         "project.create"
     ])
 
@@ -27,23 +28,38 @@ class PermissionsDict(dict):
 
 class User(SerializableMixin):
 
-    serializable_attrs = ['name', 'path', 'last_updated', 'projects',
-                          'password', 'auth_tokens', 'permissions']
-    
-    def __init__(self, path, projects=list()):
-        self.path = os.path.abspath(path)
-        self.name = os.path.basename(path)
+    max_token_age = 60*60*24 # 24 hrs in sec
+
+    def __init__(self, name, projects=list(), ssh_public_keys=list()):
+        self.name = name
+        self.path = os.path.abspath(
+            os.path.join(settings.repository_root, name))
         self.projects = projects
+        self.ssh_public_keys = ssh_public_keys
 
         self._password = None
-        self.auth_tokens = list()
+        self.auth_tokens = dict()
         self.permissions = PermissionsDict()
 
 
+    def deploy(self):
+        if not os.path.isdir(self.path):
+            os.mkdir(self.path)
+
+    def deployed(self):
+        return os.path.isdir(self.path):
+
+    exists = deployed
+
+    def undeploy(self):
+        os.rmdir(self.path)
+
     def validate(self):
         # validate username, ensure projects exist
-        self.validation_errors = []
-        return True # for now
+        self.validation_errors = v = []
+        _validate(os.path.exists(self.path),
+                  "user path does not exist", v)
+        return len(v) > 1
 
 
     @property
@@ -60,10 +76,6 @@ class User(SerializableMixin):
         return self
 
 
-    def check_token(self, auth_token):
-        return auth_token in self.auth_tokens
-
-
     def authenticate(self, raw_password):
         if not raw_password or type(raw_password) not in (str, unicode):
             return False
@@ -71,23 +83,57 @@ class User(SerializableMixin):
         to_cmp = hasher(raw_password, self.password.salt,
                         int(self.password.cost))
         if True == password.compare(to_cmp, self.password):
-            return password.token(self.password)
+            token, time = password.token()
+            self.auth_tokens[token] = time
+            return token
         else:
             return False
 
 
+    def purge_old_tokens(self):
+        to_purge = []
+        now = time.time()
+        for token, birthdate in self.auth_tokens.iteritems():
+            if now-birthdate > self.max_token_age:
+                to_purge.append(token)
+        for t in to_purge:
+            del self.auth_tokens[t]
+        return len(to_purge)
+            
+
+    def check_token(self, auth_token):
+        self.purge_old_tokens()
+        present = auth_token in self.auth_tokens
+        if present:
+            self.auth_tokens[auth_token] = time.time()
+        return present
+
+
+    def _custom_serialize(self):
+        return {
+            "name": self.name,
+            "path": self.path,
+            "projects": self.projects,
+            "password": password.serialize(*self.password),
+            "ssh_public_keys": self.ssh_public_keys,
+            "auth_tokens": self.auth_tokens,
+            "permissions": self.permissions
+        }
+
+
     @classmethod
     def from_dict(cls, d):
-        user = cls(d['path'], projects=d.get("projects", list()))
-        user.auth_tokens = d.get("auth_tokens", list())
+        user = cls(d['path'],
+                   d.get("projects", list()),
+                   d.get("ssh_public_keys", list()))
+        user.auth_tokens = d.get("auth_tokens", dict())
         maybe_pw = d.get("password", None)
-        if maybe_pw and password.is_hashed(maybe_pw):
-            user._password = maybe_pw
+        user.projects = d.get("projects", list())
+        user.permissions = PermissionsDict(d.get("permissions", dict()))
+        if maybe_pw and password.is_serialized(maybe_pw):
+            user._password = password.split(maybe_pw)
         return user
 
-
-    def exists(self):
-        raise NotImplementedError
 
     def __str__(self):
         return "<User '%s'>" % self.name
@@ -99,40 +145,57 @@ class User(SerializableMixin):
 
 class Project(SerializableMixin):
 
-    serializable_attrs = ['name', 'username', 'main_pipeline',
-                          'optional_pipelines']
-    
     def __init__(self, name, username,
                  main_pipeline=str(), optional_pipelines=list(),
-                 ensure_filestructure=False):
+                 read_users=list(), write_users=list(),
+                 is_public=False, ensure_filestructure=False):
         self.name = name
         self.username = username
         self.main_pipeline = main_pipeline
         self.optional_pipelines = optional_pipelines
-        
+        self.read_users = set(read_users)
+        self.write_users = set(write_users)
+        self.is_public = bool(is_public)
+        self.runs = list()
+
         if ensure_filestructure and not self.deployed():
             self.deploy()
+
+        self.dedupe_users()
 
 
     def validate(self):
         self.validation_errors = v = []
+        # TODO: ensure that the deployed pipelines match the model's pipelines
         _validate(bool(self.main_pipeline),
                   "The project must use a main pipeline", v)
         _validate(type(self.optional_pipelines) is list,
                   ("The project must have a (maybe empty) "
                    "list of optional pipelines"), v)
         for pipename in [self.main_pipeline]+self.optional_pipelines:
-            _validate(PipelineLoader._import(pipename),
-                      "The pipeline `{}' does not exist".format(p), v)
+            try:
+                PipelineLoader._import(pipename)
+            except:
+                _validate(False,
+                          "The pipeline `{}' does not exist".format(pipename),
+                          v)
 
         return len(v) < 1
+
+
+    def dedupe_users(self):
+        if self.is_public:
+            self.read_users = list()
+        else:
+            self.read_users -= self.read_users & self.write_users
 
 
     def deploy(self):
         # TODO: merge anpan settings with butter settings
         prev_environ = os.environ.copy()
-        setup_repo(self.path, self.main_pipelin, self.optional_pipelines)
+        setup_repo(self.path, self.main_pipeline, self.optional_pipelines)
         os.environ = prev_environ
+        return self
 
 
     @property
@@ -144,44 +207,66 @@ class Project(SerializableMixin):
     def deployed(self):
         return all(map(os.path.isdir, (self.path, self.path+".work")))
 
+    exists = deployed
 
-    def deploy(self):
-        pass
-    
+    def undeploy(self):
+        shutil.rmtree(self.path, True)
+        shutil.rmtree(self.path+".work", True)
+
+
     @classmethod
     def from_dict(cls, d):
-        project = cls(d['name'], d['username'])
+        project = cls(d['name'], d['username'],
+                      read_users=d.get("read_users", list()),
+                      write_users=d.get("write_users", list()),
+                      is_public=d.get("is_public", False))
         project.main_pipeline = d.get("main_pipeline", "")
         project.optional_pipelins = d.get("optional_pipeline", list())
+        project.runs = d.get("runs", list())
         return project
 
 
+    def _custom_serialize(self):
+        self.dedupe_users()
+        return {
+            "name": self.name,
+            "username": self.username,
+            "main_pipeline": self.main_pipeline,
+            "optional_pipelines": list(self.optional_pipeline),
+            "runs": list(self.runs),
+            "is_public": bool(self.is_public),
+            "read_users": list(self.read_users),
+            "write_users": list(self.write_users),
+        }
+
+
     def __str__(self):
-        return "<Project(%s, %s) >" % (self.user.name, self.name)
+        return "<Project(%s/%s) >" % (self.user.name, self.name)
 
     def __repr__(self):
         return "Project"
 
-    def __hash__(self):
-        return hash(self.path)
 
 
-class Group(SerializableMixin):
+class Run(SerializableMixin):
+    serializable_attrs = ['commit_id', 'username', 'projectname',
+                          'reporter_data', 'exit_status', 'log']
 
-    def __init__(self, name, users=set()):
-        self.name = name
-        self.users = users
-
+    def __init(self, commit_id, projectname, username,
+               reporter_data=None, exit_status=None, log=None):
+        self.commit_id = commit_id
+        self.projectname = projectname
+        self.username = username
+        self.reporter_data = reporter_data
+        self.exit_status = exit_status
+        self.log = log
 
     def validate(self):
         self.validation_errors = []
         return True # for now
 
+    def __repr__(self):
+        fmt = "Run <{}/{}@{}>"
+        return fmt.format(self.username, self.projectname, self.commit_id)
 
-    def _custom_serialize(self):
-        return {"name": self.name, "users": list(self.users)}
 
-
-    @classmethod
-    def from_dict(cls, d):
-        return cls(d['name'], set(d['users']))

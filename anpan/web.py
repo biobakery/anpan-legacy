@@ -3,6 +3,7 @@ import sys
 import functools
 
 from bottle import (
+    run,
     get,
     put,
     post,
@@ -11,8 +12,8 @@ from bottle import (
     redirect
 )
 
-from . import db, models, settings
-from .util import serialize
+from . import models, settings
+from .util import serialize, deserialize
 
 
 USER_KEY   = "Anpanuser"
@@ -43,10 +44,10 @@ class GlobalState(object):
 def extract_creds(alt_key):
     if     "X-"+USER_KEY in request.headers \
        and "X-"+alt_key in request.headers:
-        username, passwd = map(request.headers.get, ("X-"+USER_KEY,
+        username, alt_obj = map(request.headers.get, ("X-"+USER_KEY,
                                                      "X-"+alt_key))
     elif USER_KEY in request.cookies and alt_key in request.cookies:
-        username, passwd = map(request.cookies.get, (USER_KEY, alt_key))
+        username, alt_obj = map(request.cookies.get, (USER_KEY, alt_key))
     else:
         abort(401, "Authentication required")
 
@@ -56,11 +57,12 @@ def extract_creds(alt_key):
         print >> sys.stderr, str(e)
         abort(401, "Incorrect username or password")
     
+    return user, alt_obj
 
+# TODO: cache authkeys in memory using a priority queue
 def login_reqd(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        authenticated = False
         user, auth_token = extract_creds(AUTH_KEY)
         if True == user.check_token(auth_token):
             request.environ['anpan.user'] = user
@@ -81,8 +83,9 @@ def validate(u, key="user"):
         validated = u.validate()
     except:
         validated = False
+        u.validation_errors = []
         
-    if validate != True:
+    if validated != True:
         resp = {"status": 400, "message": "Failed {} validation".format(key),
                 "errors": u.validation_errors}
         return abort(400, serialize.obj(resp))
@@ -92,7 +95,8 @@ def validate(u, key="user"):
 _lookup_map = {
     "user": lambda: state().db.load_user,
     "group": lambda: state().db.load_group,
-    "project": lambda: state().db.load_project
+    "project": lambda: state().db.load_project,
+    "run": lambda: state().db.load_run
 }
 
 def lookup(key="user", *args, **kwargs):
@@ -115,11 +119,17 @@ def login():
     if not auth_token:
         abort(401, "Incorrect username or password")
     else:
-        user.auth_tokens.append(auth_token)
         state().db.save_user(user)
-        return serialize.obj("status": 200, "message": "Login succeeded",
-                             "auth_key": auth_key)
+        return serialize.obj({"status": 200, "message": "Login succeeded",
+                              "auth_key": auth_token})
 
+
+@login_reqd
+@get(mount+"validatetoken")
+def validatetoken():
+    """Also useful for keeping token alive"""
+    return serialize.obj({"status": 200,
+                          "message": "Provided auth token is valid"})
 
 @login_reqd
 @get(mount+"user")
@@ -132,7 +142,7 @@ def user_get():
 def user_put(username):
     check_permissions("superuser", "user.create")
     u = models.User(os.path.join(settings.repository_root, username))
-    for k, v in deseralize.obj(from_fp=request.body):
+    for k, v in deserialize.obj(from_fp=request.body):
         setattr(u, k, v)
 
     validate(u, key="user")
@@ -155,45 +165,50 @@ def user_post(username):
     
 
 @login_reqd
-@get(mount+"group/<groupname>")
-def group_get(groupname):
-    g = lookup(groupname, key="group")
-    return serialize.obj(g)
-
-@login_reqd
-@put(mount+"group/<groupname>")
-def group_put(groupname):
-    check_permissions("superuser", "group.create")
-    members = deserialize.obj(request.body).get("users", [])
-    g = models.Group(groupname, members)
-    validate(g, key="group")
-    state().db.store_group(g)
-    return serialize.obj({"status": 200,
-                          "message": "Group `{}' created".format(g.name)})
+@get(mount+"project/<projname>")
+def proj_own_get(projname):
+    u = request.environ['anpan.user']
+    return serialize.obj( lookup(u.name, projname, key="project") )
     
 
 @login_reqd
-@post(mount+"group/<groupname>")
-def group_post(groupname):
-    check_permissions("superuser", "group.modify")
-    parms = deserialize.obj(from_fp=request.body)
-    g = lookup(groupname, key="group")
-    for to_del in parms.get("to_del", []):
-        g.users.remove(to_del)
-    for to_add in parms.get("to_add", []):
-        g.users.add(to_add)
-    validate(g, key="group")
-    state().db.store_group(g)
-    return serialize.obj({"status": 200,
-                          "message": "Group `{}' modified".format(g.name)})
+@get(mount+"project/<username>/<projname>")
+def proj_other_get(username, projname):
+    u = request.environ['anpan.user']
+    p = lookup(u.name, projname, key="project")
+    if p.is_public or u.name == username or u.name in p.read_users:
+        return serialize.obj(p)
+    else:
+        check_permissions("superuser")
+        return serialize.obj(p)
 
 
 @login_reqd
-@get(mount+"project/<projname>")
-def proj_get(projname):
-    user = request.environ['anpan.user']
-    return serialize.obj( lookup(user.name, projname, key="project") )
+@get(mount+"projectaccess/<username>/<projname>/<accesstype>")
+def hasaccess_get(username, projname, accesstype):
+    """Answers the question to 'do I have access to foousers/bazproject'?"""
+    u = request.environ['anpan.user']
+    if accesstype not in ["read", "write"]:
+        abort(400, serialize.obj({'status': 400,
+                                  "message": "Unsupported access type"}))
+    p = lookup(username, projname, key="project")
+    _allowed = serialize.obj(
+        {"status": 200, "access": accesstype, "allowed": True})
+    if u.name == username: # can I modify my own projects? of course
+        return _allowed
+    if u.name in p.read_users:
+        if username in p.write_users:
+            return _allowed
+        elif accesstype == "read" and username in p.read_users:
+            return _allowed
+    else: # is in read_users so u can read
+        check_permissions("superuser")
+        # at this point, the user must be a superuser, so anything is possible
+        return _allowed
 
+    return serialize.obj(
+        {"status": 200, "access": accesstype, "allowed": False})
+        
 
 @login_reqd
 @put(mount+"project/<projname>")
@@ -209,15 +224,72 @@ def proj_put(projname):
     validate(p, key="project")
     p.deploy()
     if p.deployed():
+        state().db.save_project(p)
         user.projects.append(p.name)
-        state().db.save_project(project)
     else:
         abort(500, "Failed to create project "+projname)
 
     return serialize.obj({"status": 200,
-                          "message": "Project `{}' created".format(p.name)})
+                          "message": "Project `{}/{}' created".format(
+                              user.name,p.name)})
 
 
+@login_reqd
+@post(mount+"project/<groupname>")
+def project_post(projectname):
+    user = request.environ['anpan.user']
+    parms = deserialize.obj(from_fp=request.body)
+    p = lookup(user.name, projectname, key="project")
+    p.read_users += set(parms.get("read_users_add", []))
+    p.read_users -= set(parms.get("read_users_del", []))
+    p.write_users += set(parms.get("write_users_add", []))
+    p.write_users -= set(parms.get("write_users_del", []))
+    validate(p, key="group")
+    state().db.store_project(p)
+    return serialize.obj({"status": 200,
+                          "message": "Project `{}' modified".format(p.name)})
+
+
+@login_reqd
+@get(mount+"project/<username>/<projname>/runs")
+@get(mount+"project/<username>/<projname>/runs/<commit_id>")
+def run_get(username, projname, commit_id=None):
+    u = request.environ['anpan.user']
+    p = lookup("project", username, projname)
+    if u.name not in p.read_users:
+        msg = "User `{}' is not authorized to read project `{}/{}'"
+        abort(403, serialize.obj(
+            {"status": 400,
+             "message": msg.format(u.name, username, projname)}
+        ))
+    if commit_id:
+        run = lookup("run", commit_id, projname, u.name)
+        return serialize.obj(run)
+    else:
+        return serialize.obj(p.runs)
+
+
+@login_reqd
+@put(mount+"project/<username>/<projname>/runs/<commit_id>")
+def run_put(username, projname, commit_id):
+    u = request.environ['anpan.user']
+    p = lookup(username, projname, key="project")
+    if u.name != username or u.name not in p.write_users:
+        check_permissions("superuser")
+    data = deserialize.obj(from_fp=request.body)
+    reporter_data = data.get('reporter_data', None)
+    log = data.get("log", None)
+    exit_status = data.get("exit_status", None)
+    run = models.Run(commit_id, p.name, username, reporter_data,
+                     exit_status, log)
+    validate(run, key="run")
+    p.runs.append(commit_id)
+    state().db.save_run(run)
+    state().db.save_project(p)
+    return serialize.obj({"status": 200,
+                          "message": "Run `{}/{}/{}' created".format(
+                              username, p.name, commit_id)})
+    
 
 @get(mount+"")
 def index():
@@ -225,8 +297,8 @@ def index():
 
 
 def main():
-    bottle.run(host=settings.web.host, port=settings.web.port,
-               debug=settings.debug, reloader=settings.debug)
+    run(host=settings.web.host, port=settings.web.port,
+        debug=settings.debug, reloader=settings.debug)
 
 
 if __name__ == "__main__":

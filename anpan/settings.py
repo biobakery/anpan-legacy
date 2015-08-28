@@ -1,4 +1,5 @@
 import os
+import re
 
 from . import db
 
@@ -15,7 +16,13 @@ class email:
 class web:
     host = "0.0.0.0"
     port = 8080
-    prefix_url = ""
+    prefix_url = "/"
+
+class fileweb:
+    host = "0.0.0.0"
+    port = 8081
+    prefix_url = "/files/"
+    anpan_web_url = "http://localhost:{}{}".format(web.port, web.prefix_url)
 
 class ldap:
     url         = "ldaps://dc2-rc/"
