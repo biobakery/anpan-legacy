@@ -1,8 +1,9 @@
 import os
 import time
-import random
 from itertools import izip
 from collections import namedtuple
+from base64 import b64encode as b64
+from base64 import b64decode as unb64
 
 import pbkdf2
 
@@ -40,7 +41,7 @@ HashedPassword = namedtuple("HashedPassword",
 def split(hash_str):
     algo, b, actual_hash = hash_str.split("$")
     salt_str, cost = b.split(":")
-    return HashedPassword(algo, salt_str, cost, actual_hash)
+    return HashedPassword(algo, unb64(salt_str), int(cost), actual_hash)
 
 
 def hash(raw_password, salt_str=None, iters=DEFAULT_COST_FACTOR,
@@ -48,23 +49,24 @@ def hash(raw_password, salt_str=None, iters=DEFAULT_COST_FACTOR,
     algo = "pbkdf2-256"
     if not salt_str:
         salt_str = salt()
-    hash_str = pbkdf2.pbkdf2_hex(raw_password, salt_str, iterations=iters,
+    hash_str = pbkdf2.pbkdf2_hex(bytearray(raw_password, 'utf-8'),
+                                 salt_str, iterations=iters,
                                  keylen=keylen)
     if do_serialize:
-        return serialize(algo, salt_str, iters, hash_str)
+        return serialize((algo, salt_str, iters, hash_str))
     else:
         return HashedPassword(algo, salt_str, iters, hash_str)
 
 
 def serialize(hashed_pw):
     algo, salt, cost, hash = hashed_pw
-    return "{}${}:{}${}".format(algo, salt, cost, hash)
+    return "{}${}:{}${}".format(algo, b64(salt), cost, hash)
 
 
-def token(length, the_time=None):
+def token(length=DEFAULT_AUTHKEY_LEN, the_time=None):
     if not the_time:
         the_time = time.time()
-    return random_string(n=DEFAULT_AUTHKEY_LEN), the_time
+    return random_string(n=length), the_time
 
 
 def is_serialized(s):

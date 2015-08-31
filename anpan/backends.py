@@ -1,18 +1,13 @@
-from itertools import counter
+from itertools import count
 from base64 import b64encode as b64
 
 import leveldb
 
-
+from . import settings
 from .models import User, Project, Run
 from .util import serialize, deserialize, get_counter_state
 
-
-
 class BaseBackend(object):
-
-    def __init__(self, hasher):
-        self.hasher = hasher
 
     def open(self, create_if_missing=False):
         raise NotImplementedError
@@ -56,39 +51,45 @@ class LevelDBBackend(BaseBackend):
     def __init__(self, db_dir, *args, **kws):
         self.db_dir = db_dir
         self.db = None
-        super(self, LevelDBBackend).__init__(*args, **kws)
+        super(LevelDBBackend, self).__init__(*args, **kws)
 
 
     def ready(self):
         try:
-            db = leveldb.LevelDB(self.db_dir,
-                                 create_if_missing=False,
-                                 paranoid_checks=True)
-            db.Get("stats")
+            self.db.Get("stats")
         except:
             return False
         else:
             return True
 
 
-    def open(self, create_if_missing=False):
-        self.db = leveldb.LevelDB(create_if_missing=create_if_missing)
-        self.stats = deserialize.obj(self.db.get("stats"))
+    def open(self):
+        self.db = leveldb.LevelDB(self.db_dir,
+                                  create_if_missing=False)
+        self.stats = deserialize.obj(self.db.Get("stats"))
         for k in self.STATS_RANGE_KEYS:
-            self.stats['k'][1] = counter(self.stats['k'][1])
+            self.stats[k][1] = count(self.stats[k][1])
         return self
 
     def create(self):
-        self.open(True)
-        stats = dict([ (k, (0, 0)) for k in self.STATS_RANGE_KEYS ])
-        self.db.Put("stats", serialize.obj(stats), sync=True)
+        self.db = leveldb.LevelDB(self.db_dir,
+                                  create_if_missing=True,
+                                  error_if_exists=True)
+        self.stats = dict([ (k, (0, 0)) for k in self.STATS_RANGE_KEYS ])
+        self.db.Put("stats", serialize.obj(self.stats), sync=True)
+        for k in self.STATS_RANGE_KEYS:
+            v = self.stats[k]
+            self.stats[k] = (v[0], count(v[1]))
+        return self
+
         
     def checkpoint(self):
-        maybe_ser = lambda k_v: k_v[0], get_counter_state(k_v[1]) \
-                    if k_v[0] in self.STATS_RANGE_KEYS else k_v
-        self.db.Put("stats", serialize.obj(
-            dict(map( maybe_ser, self.stats.iteritems()))
-        ))
+        stats = self.stats.copy()
+        for k in self.STATS_RANGE_KEYS:
+            bot, top = stats[k]
+            stats[k] = (bot, get_counter_state(top))
+        self.db.Put("stats", serialize.obj(stats))
+
 
     def close(self):
         self.checkpoint()
@@ -108,14 +109,20 @@ class LevelDBBackend(BaseBackend):
         return step_two
 
     def _2step_put(self, containerkey, obj_key, val):
-        id = next(self.stats[containerkey][1])
-        id = containerkey+"+_by_id/"+str(id)
-        self.db.Put(id, val)
         try:
-            self.db.Put(obj_key, id)
-        except:
-            self.db.Delete(id)
-            raise
+            id = self.db.Get(obj_key)
+            new = False
+        except KeyError:
+            id = next(self.stats[containerkey][1])
+            id = containerkey+"_by_id/"+str(id)
+            new = True
+        self.db.Put(id, val)
+        if new:
+            try:
+                self.db.Put(obj_key, id)
+            except:
+                self.db.Delete(id)
+                raise
         return True
 
     @staticmethod
@@ -137,13 +144,13 @@ class LevelDBBackend(BaseBackend):
 
     def save_project(self, project):
         projectblob = serialize.obj(project)
-        return self.db.Put(self._project_fmt(project.username, project.name),
+        return self.db.Put(self._project_key(project.username, project.name),
                            projectblob)
 
     def save_run(self, run):
         return self.db.Put(
             self._run_key(run.commit_id, run.projectname, run.username),
-            serialize.obj({"reporter_data": run.data,
+            serialize.obj({"reporter_data": run.reporter_data,
                            "exit_status": run.exit_status,
                            "log": run.log})
         )
@@ -154,12 +161,12 @@ class LevelDBBackend(BaseBackend):
         return User.from_dict(deserialize.obj(userblob))
 
     def load_all_users(self):
-        keyvals = self.db.RangerIter(
+        keyvals = self.db.RangeIter(
             key_from="user_by_id/"+str(self.stats['user'][0]),
             key_to="user_by_id/"+str(get_counter_state(self.stats['user'][1])),
             include_value=True)
-        for k, v in keyvals:
-            yield v
+        for _, v in keyvals:
+            yield User.from_dict(deserialize.obj(v))
 
     def load_project(self, username, projectname):
         # projects are contained within users, so no 2step needed here
@@ -170,7 +177,17 @@ class LevelDBBackend(BaseBackend):
         runblob = self.db.Get(self._run_key(commit_id, projectname, username))
         rundata = deserialize.obj(runblob)
         return Run(commit_id, projectname, username,
-                   rundata.get("reporter_info", None),
+                   rundata.get("reporter_data", None),
                    rundata.get("exit_status", None),
                    rundata.get("log", None))
+
+
+backend_map = {
+    None: LevelDBBackend,
+    "leveldb": LevelDBBackend
+}
+
+def backend(name=None):
+    b = backend_map[settings.backend.name]
+    return b(*settings.backend.args, **settings.backend.keywords)
 

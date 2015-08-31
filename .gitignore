@@ -3,3 +3,5 @@
 *.egg-info
 .fuse_hidden
 doc/build/*
+.noseids
+\#*

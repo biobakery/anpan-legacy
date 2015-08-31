@@ -29,7 +29,7 @@ setup(
     entry_points= {
         'console_scripts': [
             'anpan-web     = anpan.web:main',
-            'anpan-fileweb = anpan.fileweb:main'
+            'anpan-fileweb = anpan.fileweb:main',
             'anpan         = anpan.cli:main',
         ],
     }

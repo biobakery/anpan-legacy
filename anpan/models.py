@@ -5,7 +5,7 @@ import shutil
 from anadama.loader import PipelineLoader
 from butter.commands import setup_repo
 
-from . import password, settings
+from . import password, settings, password
 from .util.serialize import SerializableMixin 
 
 def _validate(success, msg, container):
@@ -23,7 +23,7 @@ class PermissionsDict(dict):
     def __setitem__(self, key, val):
         if key not in self.known_permissions:
             raise ValueError("Unknown permission "+key)
-        return super(self, PermissionsDict).__setitem__(key, val)
+        return super(PermissionsDict, self).__setitem__(key, val)
 
 
 class User(SerializableMixin):
@@ -45,9 +45,10 @@ class User(SerializableMixin):
     def deploy(self):
         if not os.path.isdir(self.path):
             os.mkdir(self.path)
+        return self
 
     def deployed(self):
-        return os.path.isdir(self.path):
+        return os.path.isdir(self.path)
 
     exists = deployed
 
@@ -59,7 +60,7 @@ class User(SerializableMixin):
         self.validation_errors = v = []
         _validate(os.path.exists(self.path),
                   "user path does not exist", v)
-        return len(v) > 1
+        return len(v) == 0
 
 
     @property
@@ -68,11 +69,14 @@ class User(SerializableMixin):
 
     @password.setter
     def password(self, value):
-        raise Exception("Use set_password instead!")
+        self.set_password(value)
 
-    #Wish I could use a @property, but need extra args
-    def set_password(self, password, hasher, *args, **kws):
-        self._password = hasher(password, *args, **kws)
+    def set_password(self, pw_str, hasher=None, *args, **kws):
+        if not hasher:
+            hasher = password.hasher_map['default']
+        elif type(hasher) is str:
+            hasher = password.hasher_map[hasher]
+        self._password = hasher(pw_str, *args, **kws)
         return self
 
 
@@ -114,7 +118,7 @@ class User(SerializableMixin):
             "name": self.name,
             "path": self.path,
             "projects": self.projects,
-            "password": password.serialize(*self.password),
+            "password": password.serialize(self.password),
             "ssh_public_keys": self.ssh_public_keys,
             "auth_tokens": self.auth_tokens,
             "permissions": self.permissions
@@ -123,9 +127,11 @@ class User(SerializableMixin):
 
     @classmethod
     def from_dict(cls, d):
-        user = cls(d['path'],
+        user = cls(d['name'],
                    d.get("projects", list()),
                    d.get("ssh_public_keys", list()))
+        if 'path' in d:
+            user.path = d['path']
         user.auth_tokens = d.get("auth_tokens", dict())
         maybe_pw = d.get("password", None)
         user.projects = d.get("projects", list())
@@ -180,12 +186,12 @@ class Project(SerializableMixin):
                           "The pipeline `{}' does not exist".format(pipename),
                           v)
 
-        return len(v) < 1
+        return len(v) == 0
 
 
     def dedupe_users(self):
         if self.is_public:
-            self.read_users = list()
+            self.read_users = set([])
         else:
             self.read_users -= self.read_users & self.write_users
 
@@ -221,7 +227,7 @@ class Project(SerializableMixin):
                       write_users=d.get("write_users", list()),
                       is_public=d.get("is_public", False))
         project.main_pipeline = d.get("main_pipeline", "")
-        project.optional_pipelins = d.get("optional_pipeline", list())
+        project.optional_pipelines = d.get("optional_pipelines", list())
         project.runs = d.get("runs", list())
         return project
 
@@ -232,7 +238,7 @@ class Project(SerializableMixin):
             "name": self.name,
             "username": self.username,
             "main_pipeline": self.main_pipeline,
-            "optional_pipelines": list(self.optional_pipeline),
+            "optional_pipelines": list(self.optional_pipelines),
             "runs": list(self.runs),
             "is_public": bool(self.is_public),
             "read_users": list(self.read_users),
@@ -241,7 +247,7 @@ class Project(SerializableMixin):
 
 
     def __str__(self):
-        return "<Project(%s/%s) >" % (self.user.name, self.name)
+        return "<Project(%s/%s)>" % (self.username, self.name)
 
     def __repr__(self):
         return "Project"
@@ -252,8 +258,8 @@ class Run(SerializableMixin):
     serializable_attrs = ['commit_id', 'username', 'projectname',
                           'reporter_data', 'exit_status', 'log']
 
-    def __init(self, commit_id, projectname, username,
-               reporter_data=None, exit_status=None, log=None):
+    def __init__(self, commit_id, projectname, username,
+                 reporter_data=None, exit_status=None, log=None):
         self.commit_id = commit_id
         self.projectname = projectname
         self.username = username

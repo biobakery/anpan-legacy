@@ -3,7 +3,7 @@ import time
 
 from nose.tools import raises
 
-from anpan import models
+from anpan import models, password
 
 class testPermissionsDict(object):
     should_exist = "superuser"
@@ -30,33 +30,37 @@ class testPermissionsDict(object):
 
     def test_get_should_work(self):
         self.test_set_should_work()
-        assert self.d[self.should_work] == True
+        assert self.d[self.should_exist] == True
         
     def test_get_shouldnt_work(self):
         try:
             self.test_set_shouldnt_work()
         except ValueError:
-            assert self.shouldnt_work not in self.d
+            assert self.shouldnt_exist not in self.d
 
     def test_modify(self):
         self.test_get_should_work()
-        self.d[self.should_work] = False
-        assert self.d[self.should_work] == False
+        self.d[self.should_exist] = False
+        assert self.d[self.should_exist] == False
 
 
 def fakeuser(pw=None):
+    the_pw = "somepass"
     u = models.User("foobaz")
+    u._rawpass = the_pw
+    u.permissions['project.create'] = True
     if pw:
-        u.set_password("somepass", password.hash)
+        u.set_password(the_pw, password.hash)
+        u.authenticate(the_pw)
     return u        
 
         
 class testUser(object):
 
     attrs = ("name", "projects", "ssh_public_keys",
-             "_password", "auth_tokens", "permissions", "max_token_age")
+             "auth_tokens", "permissions", "max_token_age")
 
-    types = (str, list, list, str, dict, models.PermissionsDict, int)
+    types = (str, list, list, dict, models.PermissionsDict, int)
 
     def setup(self):
         self.u = fakeuser()
@@ -82,7 +86,7 @@ class testUser(object):
         self.u.deploy()
         assert self.u.deployed() == True
         
-    def test_exists(self)
+    def test_exists(self):
         self.u.deploy()
         assert self.u.exists() == True
 
@@ -103,13 +107,9 @@ class testUser(object):
     def test_getpassword(self):
         assert self.u.password == None
 
-    @raises(Exception)
-    def test_setpassword(self):
-        self.u.password = "foobaz"
-
     def test_set_password_func(self):
         from anpan import password
-        ret = self.u.set_password("somepass", password.hash)
+        ret = self.u.set_password(self.u._rawpass, password.hash)
         assert type(ret) is models.User
 
     def setpass(self, pw):
@@ -140,7 +140,7 @@ class testUser(object):
         self.setpass(pw)
         tok = self.u.authenticate(pw)
         self.u.auth_tokens[tok] = time.time()-500-self.u.max_token_age
-        n_purged = self.purge_old_tokens()
+        n_purged = self.u.purge_old_tokens()
         assert n_purged > 0
         assert len(self.u.auth_tokens) == 0
         assert tok not in self.u.auth_tokens
@@ -151,7 +151,7 @@ class testUser(object):
         tok = self.u.authenticate(pw)
         assert self.u.check_token(tok) == True
         newtok = self.u.authenticate(pw)
-        self.u.auth_tokens[tok] = time.time()-500-self.u.max_token_age
+        self.u.auth_tokens[newtok] = time.time()-500-self.u.max_token_age
         assert self.u.check_token(newtok) == False
 
     def test__custom_serialize(self):
@@ -160,10 +160,11 @@ class testUser(object):
         d = self.u._custom_serialize()
         assert type(d) is dict
         for k in self.attrs:
-            assert k in d
+            if k not in ("max_token_age", "_password"):
+                assert k in d
         pw = d['password']
         assert type(pw) is str
-        assert password.is_hashed(pw)
+        assert password.is_serialized(pw)
 
     def test_from_dict(self):
         from anpan import password
@@ -172,7 +173,7 @@ class testUser(object):
         d = self.u._custom_serialize()
         user = models.User.from_dict(d)
         assert all( a==b for a, b in zip(self.u.password, user.password) )
-        assert password.is_hashed(user.password) == False
+        assert password.is_serialized(user.password) == False
         for attr, t in zip(self.attrs, self.types):
             assert type(getattr(user, attr)) is t
             assert getattr(user, attr) == getattr(self.u, attr)
@@ -186,9 +187,9 @@ class testUser(object):
 
 def fakeproject():
     return models.Project(
-        "fooproject", "foouser",
+        "fooproject", "foobaz",
         "anadama_workflows.pipelines:WGSPipeline",
-        ["anadama_workflows.pipelines:VizualizationPipeline"],
+        ["anadama_workflows.pipelines:VisualizationPipeline"],
         read_users=["baruser", "bazuser"], write_users=["quuxuser"],
         is_public=True, ensure_filestructure=False
     )
@@ -221,7 +222,7 @@ class testProject(object):
     def test_validate_success(self):
         ret = self.p.validate()
         assert ret == True
-        assert hasattr(self.p.validation_errors) == True
+        assert hasattr(self.p, "validation_errors") == True
         assert len(self.p.validation_errors) == 0
 
     def test_validate_fail(self):
@@ -234,17 +235,18 @@ class testProject(object):
 
 
     def test_dedupe_users(self):
-        self.p.read_users += self.p.write_users
+        self.p.read_users = self.p.read_users.union(self.p.write_users)
         prev = len(self.p.read_users)
         self.p.dedupe_users()
         assert prev - len(self.p.read_users) == len(self.p.write_users)
 
     def test_dedupe_users_public(self):
-        self.p.is_public = True
+        self.p.read_users = self.p.read_users.union(self.p.write_users)
         prev = len(self.p.read_users)
+        self.p.is_public = True
         self.p.dedupe_users()
-        assert len(self.p.read_users) == 0
-        assert len(self.p.read_users) > prev
+        assert 0 == len(self.p.read_users)
+        assert prev > len(self.p.read_users) 
 
     def test_deploy(self):
         ret = self.p.deploy()
@@ -252,9 +254,9 @@ class testProject(object):
         assert type(ret) is models.Project
 
     def test_undeploy(self):
-        self.u.deploy()
-        self.u.undeploy()
-        assert not os.path.isdir(self.u.path)
+        self.p.deploy()
+        self.p.undeploy()
+        assert not os.path.isdir(self.p.path)
 
     def test__custom_serialize(self):
         d = self.p._custom_serialize()
@@ -275,7 +277,7 @@ class testProject(object):
 
     
 def fakerun():
-    return  models.Run("fooproject", "foouser", "6f85762",
+    return  models.Run("6f85762", "fooproject", "foobaz", 
                        reporter_data="", exit_status=0, log="")
 
 class testRun(object):

@@ -1,5 +1,6 @@
 import time
 import zlib
+from itertools import izip, tee
 
 from anpan import password
 
@@ -22,7 +23,7 @@ def test__safe_str_cmp():
         for i in xrange(n):
             password._safe_str_cmp(a, b)
 
-    ratio = timeit(longcmp, early_equal) / timeit(longcmp, late_equal)
+    ratio = timeit(longcmp, *early_equal) / timeit(longcmp, *late_equal)
     assert 0.9 < ratio < 1.1
 
 
@@ -34,7 +35,7 @@ def test_compare():
 mean = lambda xs: sum(xs)/len(xs)
 
 def compression_ratio(s):
-    return len(zlib.compress(s)) / len(s)
+    return len(zlib.compress(s)) / float(len(s))
 
 def test_salt():
     assert len(password.salt()) == password.DEFAULT_SALT_LEN
@@ -47,21 +48,32 @@ def test_split():
     p = password.hash("somestuff", do_serialize=True)
     assert type(password.split(p)) is password.HashedPassword
 
+def stagger(it):
+    a, b = tee(it)
+    next(b)
+    return izip(a,b)
+
 def test_hash():
-    hs = map(password.hash, big_pile_o_names)
-    assert all(len(a.hash) == len(b.hash) for a, b in zip(hs, reversed(hs)))
-    assert not any(a.hash == b.hash for a, b in zip(hs, reversed(hs)))
-    assert mean(map(compression_ratio, hs)) > 0.9
+    hs = [password.hash(n).hash for n in big_pile_o_names]
+    assert all(len(a) == len(b) for a, b in stagger(hs))
+    assert not any(a == b for a, b in stagger(hs))
+    ave_ratio = mean(map(compression_ratio, hs))
+    assert 0.9 < ave_ratio < 1.1
+
+
+def test_hash_unicode():
+    password.hash(u'\xc3bermensch')
+    
 
 def test_serialize():
     assert type(password.serialize(password.hash("blahblah"))) is str
 
 def test_token():
     tok, bdate = password.token()
-    assert tok == password.DEFAULT_AUTHKEY_LEN
-    assert len(password.token(8)[0]) == 8
+    assert len(tok) == password.DEFAULT_AUTHKEY_LEN
     assert type(bdate) is float
     assert bdate <= time.time()
+    assert len(password.token(8)[0]) == 8
     t = time.time()-300
     assert password.token(the_time=t)[1] == t
 
@@ -72,5 +84,5 @@ def test_is_serialized():
     p = password.hash("hithere", do_serialize=False)
     assert password.is_serialized(p) == False
     p = password.serialize(p)
-    assert  password.is_serialized(p) == True
+    assert password.is_serialized(p) == True
     

@@ -4,8 +4,12 @@ import logging
 import getpass
 import optparse
 
-from . import settings, models, password
-from .util import stdin_open, serialize
+from . import settings
+from . import models
+from . import password
+from . import backends
+from .util import stdin_open
+from .util import serialize
 
 
 BANNER = "AnPAN command line interface"
@@ -17,6 +21,7 @@ def print_help(*args):
         if key.startswith('-'):
             continue
         print >> sys.stderr, "\t "+key
+    return 0
 
 
 def validate(obj):
@@ -25,22 +30,29 @@ def validate(obj):
         print >> sys.stderr, msg
         for err in obj.validation_errors:
             print >> sys.stderr, err
-        sys.exit(1)
+        return False
     return True
 
 
-def has_access(requestor_name, project_owner_name, projectname):
-    db = settings.backend.open()
+def has_access(requestor_name, project_owner_name, projectname, db=None):
+    had_no_db = False
+    if not db:
+        db = backends.backend().open()
+        had_no_db = True
     p = db.load_project(project_owner_name, projectname)
     if requestor_name == p.username:
-        return "write"
+        ret =  "write"
     elif requestor_name in p.write_users:
-        return "write"
+        ret =  "write"
     elif p.is_public:
-        return "read"
+        ret =  "read"
     elif requestor_name in p.read_users:
-        return "read"
-    return False
+        ret =  "read"
+    else:
+        ret =  False
+    if had_no_db == True:
+        db.close()
+    return ret
 
 
 ##########
@@ -50,10 +62,11 @@ def initdb_cmd(argv):
     HELP = "Initialize anpan database"
     parser = optparse.OptionParser(option_list=[], usage=HELP)
     parser.parse_args(args=argv)
-    settings.backend().create()
+    db = backends.backend().create()
     if not os.path.isdir(settings.repository_root):
         os.mkdir(settings.repository_root)
     print "Database setup complete."
+    db.close()
 
 
 def users_cmd(argv):
@@ -65,7 +78,7 @@ def users_cmd(argv):
     ], usage=HELP)
     opts, args = parser.parse_args(args=argv)
 
-    db = settings.backend().open()
+    db = backends.backend().open()
     if not args:
         users = db.load_all_users()
     else:
@@ -80,6 +93,8 @@ def users_cmd(argv):
 
     for user in users:
         _print(user)
+
+    db.close()
         
 
 def projects_cmd(argv):
@@ -91,7 +106,7 @@ def projects_cmd(argv):
     ], usage=HELP)
     opts, args = parser.parse_args(args=argv)
 
-    db = settings.backend().open()
+    db = backends.backend().open()
     projects = iter(db.load_project(*spec.split("/")) for spec in args )
 
     if opts.attr:
@@ -104,6 +119,8 @@ def projects_cmd(argv):
     for p in projects:
         _print(p)
 
+    db.close()
+
 
 def runs_cmd(argv):
     HELP = """%prog print serialized run
@@ -113,13 +130,13 @@ def runs_cmd(argv):
 
     if len(args) < 3:
         parser.print_usage()
-        sys.exit(1)
+        return 1
 
     username, projectname, commit_id = args
-    db = settings.backend().open()
+    db = backends.backend().open()
     run = db.load_run(commit_id, projectname, username)
     print serialize.obj(run)
-
+    db.close()
 
 
 def createuser_cmd(argv):
@@ -135,10 +152,9 @@ def createuser_cmd(argv):
     parser = optparse.OptionParser(option_list=options, usage=HELP)
     opts, args = parser.parse_args(args=argv)
 
-    db = settings.backend().open()
+    db = backends.backend().open()
     for username in args:
-        user = models.User(os.path.join(settings.repository_root,
-                                        username))
+        user = models.User(username)
         raw_pw = getpass.getpass("Password for `{}'".format(username))
         hasher = password.hasher_map[None]
         user.set_password(raw_pw, hasher)
@@ -146,6 +162,7 @@ def createuser_cmd(argv):
             user.permissions[perm] = True
         db.save_user(user)
         print "Completed user setup for `{}'".format(username)
+    db.close()
 
 
 def createproject_cmd(argv):
@@ -176,8 +193,6 @@ def createproject_cmd(argv):
     parser = optparse.OptionParser(option_list=options, usage=HELP)
     opts, args = parser.parse_args(args=argv)
 
-
-    
     username, projectname, pipename = args[:3]
     opt_pipelines = args[3:]
 
@@ -189,7 +204,7 @@ def createproject_cmd(argv):
                 username, perm = f.strip().split(":")
                 perm_map[perm].append(username)
 
-    db = settings.backend().open()
+    db = backends.backend().open()
     u = db.load_user(username)
     u.projects.append(projectname)
     p = models.Project(projectname, username,
@@ -203,7 +218,11 @@ def createproject_cmd(argv):
     if validated:
         p.deploy()
         db.save_project(p)
-    
+        db.save_user(u)
+    else:
+        return 1
+    db.close()    
+
 
 def modifyproject_cmd(argv):
     HELP = """%prog - Modify anpan project
@@ -225,16 +244,16 @@ def modifyproject_cmd(argv):
                   "the format of 'username:permission' e.g. 'quux:read'. "
                   "Use - for stdin")),
         optparse.make_option(
-            "-p", "--public", dest="is_public",
+            "-p", "--publicity", dest="is_public",
             action="store_true", default=False,
-            help="Make this project public; readable by everyone"),
+            help="Toggle whether the project is public; readable by everyone"),
     ]
 
     parser = optparse.OptionParser(option_list=options, usage=HELP)
     opts, args = parser.parse_args(args=argv)
     if len(args) < 2:
         parser.print_usage()
-        sys.exit(1)
+        return 1
 
     username, projectname = args
 
@@ -246,22 +265,26 @@ def modifyproject_cmd(argv):
                 username, perm = f.strip().split(":")
                 perm_map[perm].append(username)
 
-    db = settings.backend().open()
+    db = backends.backend().open()
     try:
-        p = db.load_project(args[0])
+        p = db.load_project(username, projectname)
     except KeyError:
         print >> sys.stderr, "Project `{}/{}'does not exist: ".format(args)
-        sys.exit(1)
+        return 1
 
-    p.is_public = opts.is_public
-    p.read_users = opts.read_users
-    p.write_users = opts.write_users
+    if opts.is_public:
+        p.is_public = not p.is_public
+    p.read_users = set(opts.read_users)
+    p.write_users = set(opts.write_users)
 
     validated = validate(p)
     if validated:
         if not p.deployed():
             p.deploy()
         db.save_project(p)
+    else:
+        return 1
+    db.close()
 
 
 def createrun_cmd(argv):
@@ -283,7 +306,7 @@ def createrun_cmd(argv):
     opts, args = parser.parse_args(args=argv)
     if len(args) < 3:
         parser.print_usage()
-        sys.exit(1)
+        return 1
 
     if opts.log_file:
         stdin_msg = "Reading log file from stdin"
@@ -291,17 +314,18 @@ def createrun_cmd(argv):
             opts.log_file = f.read()
         
     username, projname, commit_id = args
-    db = settings.backend().open()
+    db = backends.backend().open()
     try:
         run = db.load_run(commit_id, projname, username)
-        run.exit_status = opts.exit_status
+        run.exit_status = int(opts.exit_status)
         run.log = opts.log_file
     except KeyError:
         run = models.Run(commit_id, projname, username, None,
-                         opts.exit_status, opts.log_file)
+                         int(opts.exit_status), opts.log_file)
 
     db.save_run(run)
-    
+    db.close()    
+
 
 def hasaccess_cmd(argv):
     class exits:
@@ -311,16 +335,18 @@ def hasaccess_cmd(argv):
     HELP="requestor project_owner, project"
     if len(argv) < 3:
         print >> sys.stderr, HELP
-        sys.exit(1)
+        return 1
 
     requestor, project_owner, project = argv
-    access = has_access(requestor, project_owner, project)
+    db = backends.backend().open()
+    access = has_access(requestor, project_owner, project, db=db)
     if access == "write":
-        sys.exit(exits.write_access)
+        return exits.write_access
     elif access == "read":
-        sys.exit(exits.read_access)
+        return exits.read_access
     else:
-        sys.exit(0)
+        return 0
+    db.close()
 
 
 def authkey_cmd(argv):
@@ -330,17 +356,17 @@ def authkey_cmd(argv):
     
     if not args:
         parser.print_usage()
-        sys.exit(1)
+        return 1
 
     username = args[0]
 
-    db = settings.backend().open()
+    db = backends.backend().open()
     u = db.load_user(username)
-    token, create_time = password.token(u.password)
+    token, create_time = password.token()
     u.auth_tokens[token] = create_time
     db.save_user(u)
     print token
-    
+    db.close()
 
 
 subcommand_map = {

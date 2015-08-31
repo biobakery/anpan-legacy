@@ -10,11 +10,13 @@ snd = operator.itemgetter(1)
 
 PY2 = sys.version_info[0] == 2
 text_type = unicode
+_windows_device_files = ('CON', 'AUX', 'COM1', 'COM2', 'COM3', 'COM4', 'LPT1',
+                         'LPT2', 'LPT3', 'PRN', 'NUL')
 
 safe_chrs = map(chr, range(48,58)+range(65,91)+range(97,123))
 
 def random_string(n=32, chrs=safe_chrs):
-    return "".join(random.sample(chrs, n))
+    return "".join([random.choice(chrs) for _ in range(n)])
 
 
 def get_counter_state(c):
@@ -44,9 +46,10 @@ def islambda(func):
 
 
 def stdin_open(fname, *args, **kwargs):
+    msg = kwargs.pop('stdin_msg', None)
     if not fname or fname == "-":
-        if "stdin_msg" in kwargs:
-            print >> sys.stderr, kwargs['stdin_msg']
+        if msg:
+            print >> sys.stderr, msg
         return sys.stdin
     else:
         return open(fname, *args, **kwargs)

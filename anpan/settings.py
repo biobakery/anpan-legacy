@@ -1,12 +1,13 @@
 import os
 import re
 
-from . import db
-
-
 repository_root = "/home/rschwager/test_data"
 settings_env_var  = "ANPAN_SETTINGS_FILE"
-backend = lambda: db.LevelDBBackend("/home/rschwager/leveldb")
+
+class backend:
+    name = "leveldb"
+    args = ("/home/rschwager/leveldb")
+    keywords = {}
 
 class email:
     default_from_addr = "anpan@example.com"
@@ -32,29 +33,31 @@ class ldap:
 
 # Pay no attention to that man behind the curtain
 
-_settings_file = ""
-if settings_env_var in os.environ:
-    _settings_file = os.environ[settings_env_var]
-else:
-    # please go from global to local in this tuple literal as the last
-    # item, if it exists, is used as the settings file
-    for _p in ("/etc/anpan/settings.py",):
-        if os.path.exists(_p):
-            _settings_file = _p
+def reload():
+    _settings_file = ""
+    if settings_env_var in os.environ:
+        _settings_file = os.environ[settings_env_var]
+    else:
+        # please go from global to local in this tuple literal as the last
+        # item, if it exists, is used as the settings file
+        for _p in ("/etc/anpan/settings.py",):
+            if os.path.exists(_p):
+                _settings_file = _p
 
-if _settings_file:
-    import imp
-    _mod = imp.load_source("settings", _settings_file)
-    globals().update([
-        ( _s, getattr(_mod,_s) )
-        for _s in dir(_mod)
-        if not _s.startswith('__')
-    ])
+    if _settings_file:
+        import imp
+        _mod = imp.load_source("settings", _settings_file)
+        globals().update([
+            ( _s, getattr(_mod,_s) )
+            for _s in dir(_mod)
+            if not _s.startswith('__')
+        ])
 
-try:
-    with open("/etc/ldap.conf") as f:
-        for match in re.finditer(r'\s*bindpw\s+(\S+)', f.read()):
-            # catch the last bindpw in the ldap.conf
-            ldap.bind_pw = match.group(1)
-except:
-    pass
+    global ldap
+    try:
+        with open("/etc/ldap.conf") as f:
+            for match in re.finditer(r'\s*bindpw\s+(\S+)', f.read()):
+                # catch the last bindpw in the ldap.conf
+                ldap.bind_pw = match.group(1)
+    except:
+        pass
