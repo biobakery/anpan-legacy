@@ -5,6 +5,63 @@ from nose.tools import raises
 
 from anpan import models, password
 
+class testLRUCache(object):
+
+    def setUp(self):
+        self.c = models.LRUCache(max_size=5)
+
+    def test_create(self):
+        models.LRUCache()
+        models.LRUCache({"a": 1, "b":2})
+        models.LRUCache([("c", 3), ("d",4 )])
+
+    def test_len(self):
+        c = models.LRUCache()
+        assert len(c) == 0
+        c["a"] = "foobaz"
+        assert len(c) == 1
+        del c["a"]
+        assert len(c) == 0
+        
+    def test_set_get(self):
+        x = (1,2,3,4)
+        self.c[9] = x
+        assert self.c[9] == x
+
+    def test_contains(self):
+        self.c["a"] = "foo"
+        assert "a" in self.c
+
+    def test_lru_len(self):
+        r = range(9)
+        for a, b in zip(r, reversed(r)):
+            self.c[a] = b
+        assert len(self.c) == 5
+
+    def test_lru_contains(self):
+        r = range(9)
+        for a, b in zip(r, reversed(r)):
+            self.c[a] = b
+        assert 3 not in self.c
+        assert 7 in self.c
+
+    @raises(KeyError)
+    def test_lru_miss(self):
+        r = range(9)
+        for a, b in zip(r, reversed(r)):
+            self.c[a] = b
+        self.c[2]
+
+    def test_lru_get(self):
+        r = range(5)
+        for a, b in zip(r, reversed(r)):
+            self.c[a] = b
+        self.c[0]
+        self.c[5] = 5
+        self.c[6] = 6
+        assert self.c[0] == 4
+        
+
 class testPermissionsDict(object):
     should_exist = "superuser"
     shouldnt_exist = "fooquux"

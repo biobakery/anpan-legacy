@@ -1,6 +1,8 @@
 import os
 import time
 import shutil
+import itertools
+from collections import deque
 
 from anadama.loader import PipelineLoader
 from butter.commands import setup_repo
@@ -8,9 +10,35 @@ from butter.commands import setup_repo
 from . import password, settings, password
 from .util.serialize import SerializableMixin 
 
+DEFAULT_CACHE_SIZE=1000
+
 def _validate(success, msg, container):
     if not success:
         container.append(msg)
+
+
+class LRUCache(dict):
+    def __init__(self, *args, **kwargs):
+        max_size      = kwargs.pop('max_size', DEFAULT_CACHE_SIZE)
+        super(LRUCache, self).__init__(*args, **kwargs)
+        self.q        = deque([], maxlen=max_size)
+        self.max_size = max_size
+
+    def _push(self, k):
+        if len(self.q) >= self.max_size:
+            old_key = self.q[0]
+            if old_key != k and super(LRUCache, self).__contains__(old_key):
+                super(LRUCache, self).__delitem__(old_key)
+        self.q.append(k)
+                
+    def __getitem__(self, key):
+        val = super(LRUCache, self).__getitem__(key)
+        self._push(key)
+        return val
+
+    def __setitem__(self, key, val):
+        super(LRUCache, self).__setitem__(key, val)
+        self._push(key)
 
 
 class PermissionsDict(dict):

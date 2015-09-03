@@ -343,6 +343,30 @@ def test_hasaccess_get():
 
 
 @with_setup(projsetup, teardown)
+def test_hasaccess_get_public():
+    u = fakeuser(pw=True)
+    resp = get("login", headers={"X-"+web.USER_KEY: u.name,
+                                 "X-"+web.PASSWD_KEY: u._rawpass})
+    tok = resp.json()['auth_key']
+    p = fakeproject()
+    url = "projectaccess/{}/{}/read".format(u.name, p.name)
+    resp = get(url)
+    j = resp.json()
+    assert j['access'] == "read" and j['allowed'] == True
+
+    resp = post("project/"+p.name, headers={"X-"+web.USER_KEY: u.name,
+                                            "X-"+web.AUTH_KEY: tok},
+                json={"is_public": False})
+    assert resp.status_code == 200
+    assert resp.json()['status'] == 200
+
+    url = "projectaccess/{}/{}/read".format(u.name, p.name)
+    resp = get(url)
+    assert resp.status_code == 401
+
+
+
+@with_setup(projsetup, teardown)
 def test_proj_put():
     u = fakeuser(pw=True)
     resp = get("login", headers={"X-"+web.USER_KEY: u.name,
@@ -374,6 +398,16 @@ def test_project_post():
     resp = get("project/"+p.name, headers={"X-"+web.USER_KEY: u.name,
                                            "X-"+web.AUTH_KEY: tok})
     assert "citizenfour" in resp.json()['write_users']
+    assert resp.json()['is_public'] == True
+    resp = post("project/"+p.name, headers={"X-"+web.USER_KEY: u.name,
+                                            "X-"+web.AUTH_KEY: tok},
+                json={"is_public": False})
+    assert resp.status_code == 200
+    assert resp.json()['status'] == 200
+    resp = get("project/"+p.name, headers={"X-"+web.USER_KEY: u.name,
+                                           "X-"+web.AUTH_KEY: tok})
+    assert resp.status_code == 200
+    assert resp.json()['is_public'] == False
 
 
 @with_setup(runsetup, teardown)

@@ -39,28 +39,58 @@ class GlobalState(object):
             print >> sys.stderr, str(e)
             print >> sys.stderr, "create database with anpan initdb"
             sys.exit(1)
+        self.usercache = models.LRUCache()
+        self.authcache = models.LRUCache()
+
+def get_or_load_user(username):
+    s = state()
+    if username in s.usercache:
+        return s.usercache[username]
+    else:
+        try:
+            user = s.db.load_user(username)
+        except:
+            raise
+        else:
+            s.usercache[username] = user
+            return user
+
+def get_or_load_permissions(username, projname):
+    s = state()
+    if (username, projname) in s.authcache:
+        return s.authcache[username, projname]
+    else:
+        try:
+            p = s.db.load_project(username, projname)
+        except:
+            raise
+        else:
+            entry = (p.is_public, p.read_users, p.write_users)
+            s.authcache[username, projname] = entry
+            return entry
 
 
-def extract_creds(alt_key):
+def extract_username_alt(alt_key):
     if     "X-"+USER_KEY in request.headers \
        and "X-"+alt_key in request.headers:
-        username, alt_obj = map(request.headers.get, ("X-"+USER_KEY,
-                                                     "X-"+alt_key))
+        return map(request.headers.get, ("X-"+USER_KEY, "X-"+alt_key))
     elif USER_KEY in request.cookies and alt_key in request.cookies:
-        username, alt_obj = map(request.cookies.get, (USER_KEY, alt_key))
+        return map(request.cookies.get, (USER_KEY, alt_key))
     else:
         abort(401, "Authentication required")
 
+
+def extract_creds(alt_key):
+    username, alt_obj = extract_username_alt(alt_key)
     try:
-        user = state().db.load_user(username)
+        user = get_or_load_user(username)
     except Exception as e:
         print >> sys.stderr, str(e)
         abort(401, "Incorrect username or password")
-    
+
     return user, alt_obj
 
 
-# TODO: cache authkeys in memory using a priority queue
 def login_reqd(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
@@ -69,7 +99,7 @@ def login_reqd(fn):
             request.environ['anpan.user'] = user
             return fn(*args, **kwargs)
         else:
-            return redirect(mount+"/login")
+            abort(401, "Authentication required")
     return wrapper
 
     
@@ -94,10 +124,11 @@ def validate(u, key="user"):
 
 
 _lookup_map = {
-    "user": lambda: state().db.load_user,
+    "user": lambda: get_or_load_user,
     "group": lambda: state().db.load_group,
     "project": lambda: state().db.load_project,
-    "run": lambda: state().db.load_run
+    "run": lambda: state().db.load_run,
+    "permissions": lambda: get_or_load_permissions,
 }
 
 def lookup(key="user", *args, **kwargs):
@@ -154,6 +185,7 @@ def user_put(username):
 
     validate(u, key="user")
     state().db.save_user(u)
+    state().usercache[u.name] = u
     return serialize.obj({"status": 200,
                           "message": "User `{}' created.".format(u.name)})
 
@@ -169,6 +201,7 @@ def user_post(username):
         u.deploy()
     validate(u, key="user")
     state().db.save_user(u)
+    state().usercache[u.name] = u
     return serialize.obj({"status": 200,
                           "message": "User `{}' modified".format(u.name)})
     
@@ -193,24 +226,30 @@ def proj_other_get(username, projname):
 
 
 @get(mount+"projectaccess/<username>/<projname>/<accesstype>")
-@login_reqd
 def hasaccess_get(username, projname, accesstype):
     """Answers the question to 'do I have access to foousers/bazproject'?"""
-    u = request.environ['anpan.user']
     if accesstype not in ["read", "write"]:
         abort(400, serialize.obj({'status': 400,
                                   "message": "Unsupported access type"}))
-    p = lookup("project", username, projname)
+
+    packed = lookup("permissions", username, projname)
+    is_public, read_users, write_users = packed
     _allowed = serialize.obj(
         {"status": 200, "access": accesstype, "allowed": True})
-    if u.name == username: # can I modify my own projects? of course
+    if is_public and "read" == accesstype:
         return _allowed
-    if u.name in p.read_users:
-        if username in p.write_users:
-            return _allowed
-        elif accesstype == "read" and username in p.read_users:
-            return _allowed
-    else: # is in read_users so u can read
+
+    u, token = extract_creds(AUTH_KEY)
+    if u.check_token(token) != True:
+        abort(401, "Authentication required")
+        
+    if u.name in read_users and "read" == accesstype: 
+        return _allowed
+    elif u.name == username: # can I modify my own projects? of course
+        return _allowed
+    elif u.name in write_users:
+        return _allowed
+    else: 
         check_permissions("superuser")
         # at this point, the user must be a superuser, so anything is possible
         return _allowed
@@ -255,8 +294,12 @@ def project_post(projectname):
     p.read_users -= set(parms.get("read_users_del", []))
     p.write_users |= set(parms.get("write_users_add", []))
     p.write_users -= set(parms.get("write_users_del", []))
+    if 'is_public' in parms:
+        p.is_public = bool(parms['is_public'])
     validate(p, key="group")
     state().db.save_project(p)
+    entry = (p.is_public, p.read_users, p.write_users)
+    state().authcache[p.username, p.name] = entry
     return serialize.obj({"status": 200,
                           "message": "Project `{}' modified".format(p.name)})
 
@@ -270,7 +313,7 @@ def run_get(username, projname, commit_id=None):
     if not p.is_public and u.name not in p.read_users:
         msg = "User `{}' is not authorized to read project `{}/{}'"
         abort(403, serialize.obj(
-            {"status": 400,
+            {"status": 403,
              "message": msg.format(u.name, username, projname)}
         ))
     if commit_id:
