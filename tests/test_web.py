@@ -1,4 +1,5 @@
 import os
+import time
 import shutil
 from io import BytesIO
 from multiprocessing import Process
@@ -40,6 +41,16 @@ def websetup():
     global devprocess
     devprocess = Process(target=_devserver, args=())
     devprocess.start()
+    for _ in range(5):
+        try:
+            get("")
+        except:
+            pass
+        else:
+            return None
+        time.sleep(0.25)
+    raise Exception("failed to bring up web worker")
+
 
 def usersetup(start_web=True):
     if web._state:

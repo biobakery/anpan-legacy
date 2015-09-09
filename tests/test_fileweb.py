@@ -1,4 +1,5 @@
 import os
+import time
 import shutil
 from io import BytesIO
 from multiprocessing import Process
@@ -14,8 +15,7 @@ from bottle import(
 
 import requests
 
-from anpan import fileweb, web, settings, backends
-from .test_models import fakeuser, fakeproject, fakerun
+from anpan import settings
 
 here = os.path.abspath(os.path.dirname(__file__))
 devhost = "127.0.0.1"
@@ -24,6 +24,7 @@ devurl = "http://{}:{}/".format(devhost, devport)
 devfurl = "http://{}:{}{}".format(devhost, devport, settings.fileweb.prefix_url)
 db_dir = os.path.abspath(os.path.join(here, "..", "testdb"))
 
+settings.repository_root = os.path.abspath(os.path.join(here, "..", "testrepo"))
 settings.backend.args = (db_dir,)
 settings.web.host = devhost
 settings.web.port = devport
@@ -31,13 +32,19 @@ settings.web.mount_url = "/"
 settings.debug = False
 settings.fileweb.host = devhost
 settings.fileweb.port = devport+1
+settings.fileweb.mount_url = "/files/"
+
+from anpan import fileweb, web, backends
+from anpan.util import random_string
+from .test_models import fakeuser, fakeproject, fakerun
 
 def _devserver():
-    os.mkdir(settings.repository_root)
+    if not os.path.isdir(settings.repository_root):
+        os.mkdir(settings.repository_root)
     web.main(quiet=True)
 
 def _devfileserver():
-    fileweb.main()
+    fileweb.main(quiet=True)
 
 devprocess = None
 devfileprocess = None
@@ -49,6 +56,16 @@ def websetup():
     devprocess.start()
     devfileprocess = Process(target=_devfileserver, args=())
     devfileprocess.start()
+    for _ in range(5):
+        try:
+            get("")
+            fget("")
+        except:
+            pass
+        else:
+            return None
+        time.sleep(0.25)
+    raise Exception("failed to bring up web worker")
 
 
 def usersetup(start_web=True):
@@ -139,55 +156,69 @@ def fget(url, base=devfurl, *args, **kwargs):
 def fpost(url, base=devfurl, *args, **kwargs):
     return requests.post(base+url, *args, **kwargs)
 
-            
+
+@with_setup(usersetup, teardown)            
 def test_authenticate():
-    assert False
+    u = fakeuser(pw=True)
+    assert fileweb.authenticate(u.name, random_string()) == False
+    resp = get("login", headers={"X-"+web.USER_KEY: u.name,
+                                 "X-"+web.PASSWD_KEY: u._rawpass})
+    tok = resp.json()['auth_key']
+    assert fileweb.authenticate(u.name, tok) == True
 
+
+@with_setup(projsetup, teardown)
 def test_has_access_public():
-    assert False
+    u = fakeuser(pw=True)
+    p = fakeproject()
+    assert fileweb.has_access_public(u.name, p.name) == p.is_public
+    resp = get("login", headers={"X-"+web.USER_KEY: u.name,
+                                 "X-"+web.PASSWD_KEY: u._rawpass})
+    tok = resp.json()['auth_key']
+    resp = post("project/"+p.name, headers={"X-"+web.USER_KEY: u.name,
+                                            "X-"+web.AUTH_KEY: tok},
+                json={"is_public": (not p.is_public)})
+    assert fileweb.has_access_public(u.name, p.name) == (not p.is_public)
 
+
+@with_setup(projsetup, teardown)
 def test_has_access():
-    assert False
+    u = fakeuser(pw=True)
+    p = fakeproject()
+    resp = get("login", headers={"X-"+web.USER_KEY: u.name,
+                                 "X-"+web.PASSWD_KEY: u._rawpass})
+    tok = resp.json()['auth_key']
+    assert fileweb.has_access(u.name, tok, p.username, p.name, "write") == True
+    assert fileweb.has_access("somebodyelse", tok,
+                              p.username, p.name, "write") == False
+    assert fileweb.has_access(u.name, random_string(),
+                              p.username, p.name, "write") == False
+    
 
+@with_setup(usersetup, teardown)
 def test_login_reqd():
-    assert False
+    u = fakeuser(pw=True)
+    f = lambda *args, **kws: 12345
+    resp = get("login", headers={"X-"+web.USER_KEY: u.name,
+                                 "X-"+web.PASSWD_KEY: u._rawpass})
+    tok = resp.json()['auth_key']
+    fakerequest("", None, {"X-"+web.USER_KEY: u.name, "X-"+web.AUTH_KEY: tok})
+    assert 12345 == fileweb.login_reqd(f)()
+
+@with_setup(usersetup, teardown)
+@raises(HTTPError)
+def test_login_reqd_fail():
+    f = lambda *args, **kws: 12345
+    fileweb.login_reqd(f)()
+
 
 def test_user_proj_path():
-    assert False
+    ans = fileweb.user_proj_path('user/proj/some/file.txt')
+    assert ("user", "proj", "some/file.txt") == ans
+    ans = fileweb.user_proj_path('/user/proj/some/file.txt')
+    assert ("user", "proj", "some/file.txt") == ans
 
-def test_write_meta_information_to_file():
-    assert False
-
-def test_get_or_create_file():
-    assert False
-
-def test_save_with_checksum():
-    assert False
-
-def test_save_without_checksum():
-    assert False
-
-def test_normalize_dest():
-    assert False
-
-def test_upload_post():
-    assert False
-
-def test_upload_get():
-    assert False
-
-def test_rm_post():
-    assert False
-
-def test__ls():
-    assert False
-
-def test_ls_get():
-    assert False
-
-def test_index():
-    assert False
-
-def test_main():
-    assert False
+@raises(HTTPError)
+def test_user_proj_path_fail_to_few_slashes():
+    fileweb.user_proj_path('proj/file.txt')
 

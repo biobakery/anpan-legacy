@@ -6,8 +6,10 @@ import functools
 from base64 import b64decode as unb64
 
 from bottle import (
+    run,
     get,
     post,
+    abort,
     request,
     urlquote
 )
@@ -30,23 +32,24 @@ def authenticate(username, auth_key):
 
 
 def has_access_public(username, projname):
-    url = baseurl+"projectaccess/{}/{}/{}".format(username, projname,
-                                                  accesstype)
+    url = baseurl+"projectaccess/{}/{}/read".format(username, projname)
     resp = requests.get(url, stream=False)
     if resp.status_code != 200:
         return False
-    data = deserialize.obj(from_fp=resp.raw)
+    data = deserialize.obj(resp.text)
     return data['access'] == "read" and data['allowed'] == True
     
 
 def has_access(requestorname, auth_key, username, projname, accesstype):
     url = baseurl+"projectaccess/{}/{}/{}".format(username, projname,
                                                   accesstype)
-    resp = requests.get(url, stream=False, headers={"X-"+AUTH_KEY: auth_key,
-                                                    "X-"+USER_KEY: username})
+    resp = requests.get(
+        url, stream=False,
+        headers={"X-"+AUTH_KEY: auth_key, "X-"+USER_KEY: requestorname}
+    )
     if resp.status_code != 200:
         return False
-    data = deserialize.obj(from_fp=resp.raw)
+    data = deserialize.obj(resp.text)
     return data['access'] == accesstype and data['allowed'] == True
 
 
@@ -252,9 +255,9 @@ def index():
     return "Pong"
 
 
-def main():
-    bottle.run(host=settings.fileweb.host, port=settings.fileweb.port,
-               debug=settings.debug, reloader=settings.debug)
+def main(*args, **kwargs):
+    run(host=settings.fileweb.host, port=settings.fileweb.port,
+        debug=settings.debug, reloader=settings.debug, *args, **kwargs)
 
 
 if __name__ == "__main__":
