@@ -13,7 +13,7 @@ setup(
         'simple-pbkdf2',
         'bottle',
         'leveldb==0.193',
-        'butter',
+        'butter==0.0.1',
         'anadama',
         'anadama_workflows',
     ],
