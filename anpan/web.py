@@ -332,7 +332,6 @@ def run_put(username, projname, commit_id):
     u = request.environ['anpan.user']
     p = lookup("project", username, projname)
     if not (u.name == username or u.name not in p.write_users):
-        raise Exception((u.name, username, p.write_users))
         check_permissions("superuser")
     data = deserialize.obj(from_fp=request.body)
     reporter_data = data.get('reporter_data', None)
@@ -346,6 +345,28 @@ def run_put(username, projname, commit_id):
     state().db.save_project(p)
     return serialize.obj({"status": 200,
                           "message": "Run `{}/{}/{}' created".format(
+                              username, p.name, commit_id)})
+    
+@post(mount+"project/<username>/<projname>/runs/<commit_id>")
+@login_reqd
+def run_post(username, projname, commit_id):
+    u = request.environ['anpan.user']
+    p = lookup("project", username, projname)
+    if not (u.name == username or u.name not in p.write_users):
+        check_permissions("superuser")
+    r = lookup("run", username, projname, commit_id)
+    data = deserialize.obj(from_fp=request.body)
+    for k in ("reporter_data", "exit_status", "log"):
+        v = data.get(k, None)
+        if v:
+            setattr(r, k, v)
+    validate(r, key="run")
+    state().db.save_run(run)
+    if r.commit_id not in p.runs:
+        p.runs.append(r.commit_id)
+        state().db.save_project(p)
+    return serialize.obj({"status": 200,
+                          "message": "Run `{}/{}/{}' modified".format(
                               username, p.name, commit_id)})
     
 
