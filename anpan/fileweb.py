@@ -219,9 +219,8 @@ def _ls(fname):
     s = os.stat(fname)
     size = s.st_size
     lastmodified = datetime.datetime.fromtimestamp(s.st_mtime).isoformat()
-    created = datetime.datetime.fromtimestamp(s.st_ctime).isoformat()
-    return {"type": ftype, "size": size,
-            "created": created, "lastmodified": lastmodified }
+    return {"name": fname, "type": ftype, "size": size,
+            "lastmodified": lastmodified }
 
 
 @get(mount+"ls/<b64name>")
