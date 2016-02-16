@@ -145,7 +145,7 @@ class testUser(object):
         
     def test_exists(self):
         self.u.deploy()
-        assert self.u.exists() == True
+        assert self.u.exists == True
 
     def test_undeploy(self):
         self.u.deploy()

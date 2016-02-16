@@ -78,7 +78,7 @@ class User(SerializableMixin):
     def deployed(self):
         return os.path.isdir(self.path)
 
-    exists = deployed
+    exists = property(deployed)
 
     def undeploy(self):
         os.rmdir(self.path)
@@ -149,7 +149,8 @@ class User(SerializableMixin):
             "password": password.serialize(self.password),
             "ssh_public_keys": self.ssh_public_keys,
             "auth_tokens": self.auth_tokens,
-            "permissions": self.permissions
+            "permissions": self.permissions,
+            "exists": self.exists
         }
 
 

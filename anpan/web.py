@@ -178,9 +178,12 @@ def user_put(username):
     if "password" not in blob:
         abort(400, "Password is a required field")
     for k, v in blob.iteritems():
-        setattr(u, k, v)
+        try:
+            setattr(u, k, v)
+        except AttributeError:
+            pass
 
-    if not u.exists():
+    if not u.exists:
         u.deploy()
 
     validate(u, key="user")
@@ -197,7 +200,7 @@ def user_post(username):
     u = lookup("user", username)
     for k,v in deserialize.obj(from_fp=request.body).iteritems():
         setattr(u, k, v)
-    if not u.exists():
+    if not u.exists:
         u.deploy()
     validate(u, key="user")
     state().db.save_user(u)
