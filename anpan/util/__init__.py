@@ -4,6 +4,10 @@ import sys
 import random
 import inspect
 import operator
+import subprocess
+
+class ShellException(IOError):
+    pass
 
 fst = operator.itemgetter(0)
 snd = operator.itemgetter(1)
@@ -98,3 +102,18 @@ def secure_filename(filename):
         filename = '_' + filename
 
     return filename
+
+
+def sh(cmd, **kwargs):
+    kwargs['stdout'] = kwargs.get('stdout', subprocess.PIPE)
+    kwargs['stderr'] = kwargs.get('stderr', subprocess.PIPE)
+    proc = subprocess.Popen(cmd, **kwargs)
+    ret = proc.communicate()
+    if proc.returncode:
+        raise ShellException("Command `{}' failed. \nOut: {}\nErr: {}".format(
+            cmd, ret[0], ret[1]))
+    return ret
+
+
+cd = os.chdir
+touch = lambda f: open(f, 'a').close()
