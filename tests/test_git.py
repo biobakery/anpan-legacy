@@ -3,24 +3,24 @@ import os
 import shutil
 import inspect
 
-from nose.tools import with_setup
+from nose.tools import raises
 
 from anpan import backends, settings, git
-from anpan.util import touch
 
 from .test_models import fakeuser, fakeproject
 
+here = os.path.abspath(os.path.dirname(__file__))
 db_dir = os.path.abspath(os.path.join(here, "..", "testdb"))
 settings.backend.args = (db_dir,)
 
 class testRepository(object):
 
     def setup(self):
-        self.db = backends.backend().open()
-        self.p = fakeproject()
-        self.u = self.db.load_user(self.p.username)
-        self.u.projects.append(self.p.name)
+        self.db = backends.backend().create()
+        self.u = fakeuser(pw=True)
         self.db.save_user(self.u)
+        self.p = fakeproject()
+        self.u.projects.append(self.p.name)
         self.db.save_project(self.p)
         self.p.deploy()
         self.db.close()
