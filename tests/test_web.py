@@ -432,7 +432,9 @@ def test_run_get():
     url = "project/{}/{}/runs".format(u.name, p.name)
     resp = get(url, headers={"X-"+web.USER_KEY: u.name,
                              "X-"+web.AUTH_KEY: tok})
-    assert resp.json() == [r.commit_id]
+    j = resp.json()
+    assert "commit_ids" in j
+    assert j["commit_ids"] == [r.commit_id]
 
     url = "project/{}/{}/runs/{}".format(u.name, p.name, r.commit_id)
     resp = get(url, headers={"X-"+web.USER_KEY: u.name,
