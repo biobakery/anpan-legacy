@@ -1,13 +1,12 @@
 import os
 import time
 import shutil
-import itertools
 from collections import deque
 
 from anadama.loader import PipelineLoader
 from butter.commands import setup_repo
 
-from . import password, settings, password
+from . import password, settings
 from .util.serialize import SerializableMixin 
 
 DEFAULT_CACHE_SIZE=1000

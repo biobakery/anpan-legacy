@@ -11,7 +11,8 @@ from bottle import (
     post,
     abort,
     request,
-    urlquote
+    urlquote,
+    HTTPError
 )
 
 import requests
@@ -120,7 +121,7 @@ def save_with_checksum(dst, md5chunk, md5total, chunk, chunks):
     md5 = hashlib.md5()
     f = get_or_create_file(chunk, dst)
     buf = request['wsgi.input'].read(1024*128)
-    while part:
+    while buf:
         md5.update(buf)
         f.write(buf)
         buf = request['wsgi.input'].read(1024*128)
@@ -139,7 +140,7 @@ def save_without_checksum(dst, chunk):
     f = get_or_create_file(chunk, dst)
     buf = request['wsgi.input'].read(1024*128)
     while buf:
-        f.write(part)
+        f.write(buf)
         buf = request['wsgi.input'].read(1024*128)
     f.close()
     

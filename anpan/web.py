@@ -1,4 +1,3 @@
-import os
 import sys
 import functools
 
@@ -9,7 +8,7 @@ from bottle import (
     post,
     abort,
     request,
-    redirect
+
 )
 
 from . import models, backends, settings
