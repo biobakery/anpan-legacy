@@ -42,3 +42,9 @@ class Repository(object):
             cd(here)
         return ret
 
+    def add(self,fname = [])
+        pass
+
+    def commit(self,fname = [], msg='msg', author='author')
+        pass
+
