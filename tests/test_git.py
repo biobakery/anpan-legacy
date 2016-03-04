@@ -64,8 +64,18 @@ class testRepository(object):
         with open(fname, 'w') as f:
             print >> f, "Blah"
         repo.add([fname])
-        assert fname in repo.sh(["git", "status"])
-        
+        assert os.path.basename(fname) in repo.sh(["git", "status"])
+
+
+    @raises(ValueError)
+    def test_add_fail(self):
+        repo = git.Repository(self.p.path)
+        fname "/tmp/test.txt"
+        with open(fname, 'w') as f:
+            print >> f, "Blah"
+        repo.add([fname])
+        assert os.path.basename(fname) not in repo.sh(["git", "status"])
+
 
     def test_commit(self):
         repo = git.Repository(self.p.path)
