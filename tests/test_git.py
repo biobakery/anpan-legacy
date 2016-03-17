@@ -64,13 +64,13 @@ class testRepository(object):
         with open(fname, 'w') as f:
             print >> f, "Blah"
         repo.add([fname])
-        assert os.path.basename(fname) in repo.sh(["git", "status"])
+        assert os.path.basename(fname) in repo.sh(["git", "status"])[0]
 
 
     @raises(ValueError)
     def test_add_fail(self):
         repo = git.Repository(self.p.path)
-        fname "/tmp/test.txt"
+        fname = "/tmp/test.txt"
         with open(fname, 'w') as f:
             print >> f, "Blah"
         repo.add([fname])
@@ -82,7 +82,7 @@ class testRepository(object):
         fname = os.path.join(self.p.path, "test.txt")
         with open(fname, 'w') as f:
             print >> f, "Blah"
-        msg="add test file",
+        msg="add test file"
         author="someuser <dood@place.domain>"
         ci_hash = repo.commit([fname], msg=msg, author=author)
         assert len(ci_hash) == 7
