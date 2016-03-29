@@ -238,14 +238,18 @@ class Project(SerializableMixin):
                             self.username,
                             self.name)
 
+    @property
+    def gitpath(self):
+        return self.path+'.git'
+
     def deployed(self):
-        return all(map(os.path.isdir, (self.path, self.path+".work")))
+        return all(map(os.path.isdir, (self.path, self.gitpath)))
 
     exists = deployed
 
     def undeploy(self):
         shutil.rmtree(self.path, True)
-        shutil.rmtree(self.path+".work", True)
+        shutil.rmtree(self.gitpath, True)
 
 
     @classmethod
@@ -294,7 +298,6 @@ class Run(SerializableMixin):
         self.reporter_data = reporter_data
         self.exit_status = exit_status
         self.log = log
-
     def validate(self):
         self.validation_errors = []
         return True # for now

@@ -322,7 +322,7 @@ def run_get(username, projname, commit_id=None):
         run = lookup("run", commit_id, projname, u.name)
         return serialize.obj(run)
     else:
-        return serialize.obj(p.runs)
+        return serialize.obj({"commit_ids":p.runs})
 
 
 @put(mount+"project/<username>/<projname>/runs/<commit_id>")
